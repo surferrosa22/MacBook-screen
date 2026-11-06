@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<title>Ekranı gözlüğe yolla</title>
+<style>
+  body { font: 18px/1.4 system-ui, sans-serif; background: #111; color: #eee; max-width: 640px; margin: 40px auto; padding: 0 16px; }
+  button { font-size: 18px; padding: 12px 20px; margin-right: 8px; cursor: pointer; }
+  #log { margin-top: 16px; color: #8f8; white-space: pre-wrap; }
+  video { width: 100%; max-height: 300px; background: #000; margin-top: 16px; }
+</style>
+</head>
+<body>
+<h1>Ekranı gözlüğe yolla</h1>
+<p>Önce gözlükte uygulamayı aç, sonra "Paylaşımı başlat"a bas ve <b>Tüm ekran</b>ı seç.</p>
+<button id="start">Paylaşımı başlat</button>
+<button id="stop" disabled>Durdur</button>
+<video id="preview" autoplay muted playsinline></video>
+<div id="log"></div>
+
+<script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+<script>
+const ROOM = 'dc5ec42ee380281f';          // viewer ile aynı olmalı
+const SENDER_ID = 'dz-' + ROOM + '-sender';
+
+const logEl = document.getElementById('log');
+const log = m => { logEl.textContent += m + '\n'; };
+
+let stream = null;
+const conns = new Set();
+const calls = new Set();
+
+const peer = new Peer(SENDER_ID);
+peer.on('open', id => log('Hazır: ' + id));
+peer.on('error', e => log('Hata: ' + e.type + ' ' + (e.message || '')));
+peer.on('connection', conn => {
+  conns.add(conn);
+  conn.on('open', () => { log('Gözlük bağlandı'); if (stream) callViewer(conn.peer); });
+  conn.on('close', () => { conns.delete(conn); log('Gözlük ayrıldı'); });
+});
+
+function callViewer(viewerId) {
+  const call = peer.call(viewerId, stream);
+  calls.add(call);
+  call.on('close', () => calls.delete(call));
+  // Bağlantı kurulunca bitrate'i yükselt, çözünürlüğü koru
+  const tune = setInterval(async () => {
+    const pc = call.peerConnection;
+    if (!pc) return;
+    const s = pc.getSenders().find(x => x.track && x.track.kind === 'video');
+    if (!s) return;
+    clearInterval(tune);
+    const p = s.getParameters();
+    if (!p.encodings || !p.encodings.length) p.encodings = [{}];
+    p.encodings[0].maxBitrate = 6000000;
+    p.encodings[0].maxFramerate = 15;
+    p.degradationPreference = 'maintain-resolution';
+    try { await s.setParameters(p); log('Kalite ayarlandı (6 Mbps)'); } catch (e) { log('Kalite ayarı olmadı: ' + e.message); }
+  }, 300);
+  setTimeout(() => clearInterval(tune), 10000);
+}
+
+document.getElementById('start').onclick = async () => {
+  try {
+    stream = await navigator.mediaDevices.getDisplayMedia({
+      video: { frameRate: 15, width: { ideal: 1920, max: 1920 }, height: { ideal: 1200, max: 1200 } },
+      audio: false
+    });
+    stream.getVideoTracks()[0].contentHint = 'detail'; // yazı netliği için çözünürlüğü önceliklendir
+    document.getElementById('preview').srcObject = stream;
+    document.getElementById('stop').disabled = false;
+    stream.getVideoTracks()[0].onended = stop;
+    conns.forEach(c => c.open && callViewer(c.peer));
+    log('Paylaşım başladı');
+  } catch (e) { log('Paylaşım başlamadı: ' + e.message); }
+};
+
+function stop() {
+  if (stream) stream.getTracks().forEach(t => t.stop());
+  calls.forEach(c => c.close());
+  stream = null;
+  document.getElementById('preview').srcObject = null;
+  document.getElementById('stop').disabled = true;
+  log('Durduruldu');
+}
+document.getElementById('stop').onclick = stop;
+</script>
+</body>
+</html>
