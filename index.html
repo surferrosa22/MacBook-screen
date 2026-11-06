@@ -42,12 +42,12 @@
 
 <div id="bar">
   <div class="row">
-    <button data-act="mode">Mod</button><button data-act="left">◀</button><button data-act="up">▲</button><button data-act="down">▼</button>
-    <button data-act="right">▶</button><button data-act="ok">OK</button><button data-act="dbl">2×</button><button data-act="rclick">Sağ</button>
+    <button data-act="left">◀</button><button data-act="up">▲</button><button data-act="down">▼</button><button data-act="right">▶</button>
+    <button data-act="click">Tık</button><button data-act="dbl">2×</button><button data-act="rclick">Sağ</button><button data-act="type">Yaz</button>
   </div>
   <div class="row">
-    <button data-act="type">Yaz</button><button data-act="esc">Esc</button><button data-act="pgup">⇞</button><button data-act="pgdn">⇟</button>
-    <button data-act="enter">⏎</button><button data-act="zoom">Zoom</button><button data-act="hide">Gizle</button><button data-act="dbg">Log</button>
+    <button data-act="mode">Mod</button><button data-act="zoom">Zoom</button><button data-act="scrollup">Yukarı ⇡</button><button data-act="scrolldown">Aşağı ⇣</button>
+    <button data-act="hide">Gizle</button><button data-act="dbg">Log</button>
   </div>
 </div>
 
@@ -122,7 +122,7 @@ function send(o) {
 
 // ---------- Görünüm: sığdır / doldur / 2x / 3x / 4x ----------
 let cw = SIZE, ch = SIZE, z = 1, px = 0, py = 0, levels = [1], li = 0;
-let mode = 'view';            // 'view' = kaydır/yakınlaştır, 'cursor' = imleci oynat
+let mode = 'cursor';          // 'cursor' = imleci oynat, 'view' = görüntüyü kaydır/yakınlaştır
 let curX = 0.5, curY = 0.5;   // imleç, ekranın 0..1 oranında
 let barVisible = true;
 
@@ -192,7 +192,7 @@ function arrow(dx, dy) {
   apply();
 }
 function click(opts) {
-  if (mode !== 'cursor') { toast('Önce Mod ile İMLEÇ moduna geç'); return; }
+  if (mode !== 'cursor') { toast('Önce Mod ile imleç moduna geç'); return; }
   if (send(Object.assign({ t: 'click', x: curX, y: curY }, opts))) {
     cur.classList.add('flash');
     setTimeout(() => cur.classList.remove('flash'), 180);
@@ -201,7 +201,7 @@ function click(opts) {
 
 // ---------- Yazma ----------
 function openTyper() { $('typer').style.display = 'block'; $('txt').value = ''; $('txt').focus(); }
-function closeTyper() { $('typer').style.display = 'none'; focusBtn('ok'); }
+function closeTyper() { $('typer').style.display = 'none'; focusBtn('click'); }
 function sendTyped(enter) {
   const text = $('txt').value;
   if (!text) { toast('Boş'); return; }
@@ -218,20 +218,18 @@ function setBar(show) {
   barVisible = show;
   $('bar').style.display = show ? 'block' : 'none';
   $('burger').style.display = show ? 'none' : 'block';
-  if (show) focusBtn('ok'); else $('burger').focus({ preventScroll: true });
+  if (show) focusBtn('click'); else $('burger').focus({ preventScroll: true });
 }
 
 const ACTIONS = {
-  mode: () => { mode = mode === 'view' ? 'cursor' : 'view'; apply(); toast(mode === 'cursor' ? 'İmleç modu' : 'Görünüm modu'); },
+  mode: () => { mode = mode === 'view' ? 'cursor' : 'view'; apply(); toast(mode === 'cursor' ? 'İmleç modu' : 'Görünüm modu (kaydır)'); },
   left: () => arrow(-1, 0), right: () => arrow(1, 0), up: () => arrow(0, -1), down: () => arrow(0, 1),
-  ok: () => (mode === 'cursor' ? click({}) : cycleZoom()),
+  click: () => click({}),
   dbl: () => click({ dbl: true }),
   rclick: () => click({ right: true }),
+  scrollup: () => send({ t: 'scroll', dy: 6, x: curX, y: curY }),
+  scrolldown: () => send({ t: 'scroll', dy: -6, x: curX, y: curY }),
   type: openTyper,
-  esc: () => send({ t: 'key', key: 'esc' }),
-  pgup: () => send({ t: 'key', key: 'pageup' }),
-  pgdn: () => send({ t: 'key', key: 'pagedown' }),
-  enter: () => send({ t: 'key', key: 'enter' }),
   zoom: cycleZoom,
   hide: () => setBar(false),
   show: () => setBar(true),

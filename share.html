@@ -73,6 +73,7 @@ function sanitize(m) {
   if (m.t === 'text' && typeof m.text === 'string' && m.text.length > 0) return { t: 'text', text: m.text.slice(0, 2000), enter: !!m.enter };
   if (m.t === 'key' && KEYS.includes(m.key)) return { t: 'key', key: m.key };
   if (m.t === 'click' && isFinite(m.x) && isFinite(m.y)) return { t: 'click', x: Math.min(1, Math.max(0, +m.x)), y: Math.min(1, Math.max(0, +m.y)), right: !!m.right, dbl: !!m.dbl };
+  if (m.t === 'scroll' && isFinite(m.dy) && isFinite(m.x) && isFinite(m.y)) return { t: 'scroll', dy: Math.max(-30, Math.min(30, Math.round(+m.dy))), x: Math.min(1, Math.max(0, +m.x)), y: Math.min(1, Math.max(0, +m.y)) };
   return null;
 }
 async function onControl(conn, m) {
