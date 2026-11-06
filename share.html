@@ -13,6 +13,12 @@
 <body>
 <h1>Ekranı gözlüğe yolla</h1>
 <p>Önce gözlükte uygulamayı aç, sonra "Paylaşımı başlat"a bas ve <b>Tüm ekran</b>ı seç.</p>
+<p>
+  Kare hızı:
+  <select id="fps"><option value="10">10 fps (en net yazı)</option><option value="30">30 fps</option><option value="60" selected>60 fps (en akıcı)</option></select>
+  Çözünürlük:
+  <select id="res"><option value="1280">1280</option><option value="1920" selected>1920</option><option value="2560">2560</option></select>
+</p>
 <button id="start">Paylaşımı başlat</button>
 <button id="stop" disabled>Durdur</button>
 <video id="preview" autoplay muted playsinline></video>
@@ -26,6 +32,9 @@ const SENDER_ID = 'dz-' + ROOM + '-sender';
 const logEl = document.getElementById('log');
 const log = m => { logEl.textContent += m + '\n'; };
 
+const FPS = () => +document.getElementById('fps').value;
+const RES = () => +document.getElementById('res').value;
+const bitrateFor = fps => fps >= 60 ? 14000000 : fps >= 30 ? 10000000 : 8000000;
 let stream = null;
 const conns = new Set();
 const calls = new Set();
@@ -52,10 +61,10 @@ function callViewer(viewerId) {
     clearInterval(tune);
     const p = s.getParameters();
     if (!p.encodings || !p.encodings.length) p.encodings = [{}];
-    p.encodings[0].maxBitrate = 8000000;
-    p.encodings[0].maxFramerate = 10;
+    p.encodings[0].maxBitrate = bitrateFor(FPS());
+    p.encodings[0].maxFramerate = FPS();
     p.degradationPreference = 'maintain-resolution';
-    try { await s.setParameters(p); log('Kalite ayarlandı (8 Mbps, 10 fps)'); } catch (e) { log('Kalite ayarı olmadı: ' + e.message); }
+    try { await s.setParameters(p); log('Kalite ayarlandı: ' + FPS() + ' fps, ' + (bitrateFor(FPS()) / 1e6) + ' Mbps'); } catch (e) { log('Kalite ayarı olmadı: ' + e.message); }
   }, 300);
   setTimeout(() => clearInterval(tune), 10000);
 }
@@ -63,7 +72,7 @@ function callViewer(viewerId) {
 document.getElementById('start').onclick = async () => {
   try {
     stream = await navigator.mediaDevices.getDisplayMedia({
-      video: { frameRate: 10, width: { ideal: 2560, max: 2560 }, height: { ideal: 1600, max: 1600 } },
+      video: { frameRate: { ideal: FPS(), max: FPS() }, width: { ideal: RES(), max: RES() }, height: { ideal: Math.round(RES() * 0.625), max: Math.round(RES() * 0.625) } },
       audio: false
     });
     stream.getVideoTracks()[0].contentHint = 'detail'; // yazı netliği için çözünürlüğü önceliklendir
