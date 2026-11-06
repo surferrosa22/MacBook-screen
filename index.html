@@ -8,41 +8,96 @@
   html, body { margin: 0; background: #000; color: #fff; font: 22px/1.3 system-ui, sans-serif; }
   body { width: 600px; height: 600px; overflow: hidden; position: relative; }
   #stage { position: absolute; inset: 0; overflow: hidden; }
-  video { position: absolute; left: 0; top: 0; transform-origin: 0 0; background: #000; image-rendering: auto; }
+  #content { position: absolute; left: 0; top: 0; transform-origin: 0 0; }
+  #content video { width: 100%; height: 100%; display: block; background: #000; }
+  #cur { position: absolute; border: 3px solid #0f0; border-radius: 50%; box-sizing: border-box;
+         transform: translate(-50%, -50%); pointer-events: none; display: none; box-shadow: 0 0 0 2px #000; }
+  #cur.flash { background: rgba(0,255,0,.5); }
   #msg { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
          text-align: center; padding: 24px; background: #000; }
-  #hud { position: absolute; left: 8px; bottom: 8px; font-size: 16px; opacity: .7; text-shadow: 0 0 4px #000; }
+  #hud { position: absolute; left: 8px; top: 8px; font-size: 16px; opacity: .8; text-shadow: 0 0 4px #000; }
+  #toast { position: absolute; left: 50%; top: 10px; transform: translateX(-50%); background: #222; color: #fff;
+           padding: 6px 14px; border-radius: 10px; font-size: 16px; display: none; z-index: 5; }
+  #dbg { position: absolute; left: 8px; top: 34px; font: 13px/1.2 monospace; color: #ff0; white-space: pre; display: none; z-index: 4; text-shadow: 0 0 3px #000; }
+  #bar { position: absolute; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,.72); padding: 4px; z-index: 3; }
+  .row { display: flex; gap: 4px; margin: 2px 0; }
+  .row button { flex: 1; height: 40px; font-size: 17px; padding: 0; background: #333; color: #fff; border: 2px solid #555; border-radius: 8px; }
+  .row button:focus { outline: none; border-color: #4af; background: #246; }
+  #burger { position: absolute; right: 6px; top: 6px; z-index: 6; width: 44px; height: 36px; font-size: 20px;
+            background: rgba(40,40,40,.8); color: #fff; border: 2px solid #555; border-radius: 8px; display: none; }
+  #burger:focus { outline: none; border-color: #4af; }
+  #typer { position: absolute; inset: 0; background: rgba(0,0,0,.92); z-index: 8; display: none; padding: 16px; box-sizing: border-box; }
+  #typer input { width: 100%; box-sizing: border-box; font-size: 24px; padding: 10px; border-radius: 8px; border: 2px solid #4af; background: #111; color: #fff; }
+  #typer .row { margin-top: 12px; }
+  #typer .row button { height: 52px; font-size: 20px; }
 </style>
 </head>
 <body>
-<div id="stage"><video id="v" autoplay muted playsinline></video></div>
+<div id="stage"><div id="content"><video id="v" autoplay muted playsinline></video><div id="cur"></div></div></div>
 <div id="msg">Bağlanıyor…</div>
 <div id="hud"></div>
+<div id="toast"></div>
+<div id="dbg"></div>
+<button id="burger" data-act="show">☰</button>
+
+<div id="bar">
+  <div class="row">
+    <button data-act="mode">Mod</button><button data-act="left">◀</button><button data-act="up">▲</button><button data-act="down">▼</button>
+    <button data-act="right">▶</button><button data-act="ok">OK</button><button data-act="dbl">2×</button><button data-act="rclick">Sağ</button>
+  </div>
+  <div class="row">
+    <button data-act="type">Yaz</button><button data-act="esc">Esc</button><button data-act="pgup">⇞</button><button data-act="pgdn">⇟</button>
+    <button data-act="enter">⏎</button><button data-act="zoom">Zoom</button><button data-act="hide">Gizle</button><button data-act="dbg">Log</button>
+  </div>
+</div>
+
+<div id="typer">
+  <input id="txt" type="text" autocomplete="off" placeholder="Konuş ya da yaz…">
+  <div class="row">
+    <button data-act="t-send">Yaz</button><button data-act="t-sendenter">Yaz + ⏎</button><button data-act="t-close">Kapat</button>
+  </div>
+</div>
 
 <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
 <script>
-const ROOM = 'dc5ec42ee380281f';          // share.html ile aynı olmalı
-const SENDER_ID = 'dz-' + ROOM + '-sender';
-const VIEWER_ID = 'dz-' + ROOM + '-viewer-' + Math.random().toString(36).slice(2, 8);
 const SIZE = 600;
+let SECRET = new URLSearchParams(location.hash.slice(1)).get('k') ||
+             new URLSearchParams(location.search).get('k') || '';
+try {
+  if (SECRET) localStorage.setItem('dzk', SECRET); else SECRET = localStorage.getItem('dzk') || '';
+} catch (e) {}
 
-const msg = document.getElementById('msg');
-const v = document.getElementById('v');
-const hud = document.getElementById('hud');
+const $ = id => document.getElementById(id);
+const msg = $('msg'), v = $('v'), hud = $('hud'), content = $('content'), cur = $('cur');
 const setMsg = t => { msg.style.display = t ? 'flex' : 'none'; msg.textContent = t || ''; };
 
-let peer, conn, retry;
-function connect() {
+let toastTimer;
+function toast(t) {
+  const el = $('toast');
+  el.textContent = t; el.style.display = 'block';
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => (el.style.display = 'none'), 1800);
+}
+
+// ---------- Bağlantı ----------
+async function derive(role) {
+  const b = await crypto.subtle.digest('SHA-256', new TextEncoder().encode('dz|' + SECRET + '|' + role));
+  return 'dz-' + [...new Uint8Array(b)].slice(0, 12).map(x => x.toString(16).padStart(2, '0')).join('');
+}
+
+let peer, conn, retry, SENDER_ID, VIEWER_BASE;
+async function connect() {
   clearTimeout(retry);
-  peer = new Peer(VIEWER_ID);
+  peer = new Peer(VIEWER_BASE + '-' + Math.random().toString(36).slice(2, 8));
   peer.on('call', call => {
     call.answer();
     call.on('stream', s => { v.srcObject = s; v.play().catch(() => {}); setMsg(''); });
-    call.on('close', () => { setMsg('Paylaşım bitti, bekleniyor…'); });
+    call.on('close', () => setMsg('Paylaşım bitti, bekleniyor…'));
   });
   peer.on('open', () => {
     conn = peer.connect(SENDER_ID, { reliable: true });
     conn.on('open', () => setMsg('Bağlandı, yayın bekleniyor…'));
+    conn.on('data', m => { if (m && m.t === 'ack' && !m.ok) toast(m.err || 'Hata'); });
     conn.on('close', () => { setMsg('Bağlantı koptu, yeniden deneniyor…'); restart(); });
     conn.on('error', restart);
   });
@@ -52,20 +107,33 @@ function restart() {
   try { peer && peer.destroy(); } catch (e) {}
   retry = setTimeout(connect, 3000);
 }
-connect();
+(async () => {
+  if (SECRET.length < 12) { setMsg('Gizli anahtar yok. Uygulama adresinin sonuna ?k=ANAHTAR ekle.'); return; }
+  SENDER_ID = await derive('sender');
+  VIEWER_BASE = await derive('viewer');
+  connect();
+})();
 
-// ---- Görünüm: sığdır / boşluksuz doldur / 2x / 3x / 4x ----
-// İçerik, en-boy oranı korunarak 600x600'e sığdırılır (cw x ch), sonra z ile büyütülür.
+function send(o) {
+  if (conn && conn.open) { conn.send(o); return true; }
+  toast('Mac bağlı değil');
+  return false;
+}
+
+// ---------- Görünüm: sığdır / doldur / 2x / 3x / 4x ----------
 let cw = SIZE, ch = SIZE, z = 1, px = 0, py = 0, levels = [1], li = 0;
+let mode = 'view';            // 'view' = kaydır/yakınlaştır, 'cursor' = imleci oynat
+let curX = 0.5, curY = 0.5;   // imleç, ekranın 0..1 oranında
+let barVisible = true;
 
 function layout() {
   const vw = v.videoWidth, vh = v.videoHeight;
   if (!vw || !vh) return;
   const f = Math.min(SIZE / vw, SIZE / vh);
   cw = vw * f; ch = vh * f;
-  v.style.width = cw + 'px';
-  v.style.height = ch + 'px';
-  const fill = Math.max(SIZE / cw, SIZE / ch);          // boşluksuz doldurma
+  content.style.width = cw + 'px';
+  content.style.height = ch + 'px';
+  const fill = Math.max(SIZE / cw, SIZE / ch);
   levels = [1];
   if (fill > 1.05) levels.push(fill);
   [2, 3, 4].forEach(l => { if (l > levels[levels.length - 1] + 0.1) levels.push(l); });
@@ -75,35 +143,119 @@ function layout() {
 v.addEventListener('loadedmetadata', layout);
 v.addEventListener('resize', layout);
 
-function clampAxis(p, size) {
-  return size <= SIZE ? (SIZE - size) / 2 : Math.max(SIZE - size, Math.min(0, p));
-}
+const clampAxis = (p, size) => size <= SIZE ? (SIZE - size) / 2 : Math.max(SIZE - size, Math.min(0, p));
 function apply() {
   px = clampAxis(px, cw * z);
   py = clampAxis(py, ch * z);
-  v.style.transform = `translate(${px}px, ${py}px) scale(${z})`;
-  hud.textContent = li === 0 ? '' : (li === 1 && levels.length > 1 && levels[1] < 2 ? 'dolgu' : z.toFixed(1) + 'x');
+  content.style.transform = `translate(${px}px, ${py}px) scale(${z})`;
+  const s = 30 / z;
+  cur.style.width = cur.style.height = s + 'px';
+  cur.style.borderWidth = (3 / z) + 'px';
+  cur.style.left = (curX * 100) + '%';
+  cur.style.top = (curY * 100) + '%';
+  cur.style.display = mode === 'cursor' ? 'block' : 'none';
+  hud.textContent = (mode === 'cursor' ? 'İMLEÇ' : 'GÖR') + (z > 1.01 ? ' ' + z.toFixed(1) + 'x' : '');
 }
-function cycle() {
-  // Yakınlaştırırken ekranın ortasındaki noktayı koru
+function cycleZoom() {
   const cx = (SIZE / 2 - px) / z, cy = (SIZE / 2 - py) / z;
   li = (li + 1) % levels.length;
   z = levels[li];
   px = SIZE / 2 - cx * z;
   py = SIZE / 2 - cy * z;
-  if (li === 0) { px = py = 0; }
+  if (li === 0) px = py = 0;
   apply();
 }
-document.addEventListener('click', cycle);
-document.addEventListener('keydown', e => {
-  const step = 90;
-  if (e.key === 'Enter') { cycle(); return; }
-  const m = { ArrowLeft: [step, 0], ArrowRight: [-step, 0], ArrowUp: [0, step], ArrowDown: [0, -step] }[e.key];
-  if (!m) return;
-  e.preventDefault();
-  px += m[0]; py += m[1];
+function keepCursorVisible() {
+  const m = 50, bm = barVisible ? 110 : 50;
+  const sx = px + curX * cw * z, sy = py + curY * ch * z;
+  if (sx < m) px += m - sx; else if (sx > SIZE - m) px -= sx - (SIZE - m);
+  if (sy < m) py += m - sy; else if (sy > SIZE - bm) py -= sy - (SIZE - bm);
+}
+
+let lastMove = 0, streak = 0;
+function accel() {
+  const n = Date.now();
+  streak = n - lastMove < 400 ? Math.min(streak + 1, 12) : 0;
+  lastMove = n;
+  return 1 + streak * 0.6;
+}
+function arrow(dx, dy) {
+  const a = accel();
+  if (mode === 'cursor') {
+    curX = Math.min(1, Math.max(0, curX + dx * 0.02 * a));
+    curY = Math.min(1, Math.max(0, curY + dy * 0.03 * a));
+    keepCursorVisible();
+  } else {
+    px -= dx * 80 * a;
+    py -= dy * 80 * a;
+  }
   apply();
+}
+function click(opts) {
+  if (mode !== 'cursor') { toast('Önce Mod ile İMLEÇ moduna geç'); return; }
+  if (send(Object.assign({ t: 'click', x: curX, y: curY }, opts))) {
+    cur.classList.add('flash');
+    setTimeout(() => cur.classList.remove('flash'), 180);
+  }
+}
+
+// ---------- Yazma ----------
+function openTyper() { $('typer').style.display = 'block'; $('txt').value = ''; $('txt').focus(); }
+function closeTyper() { $('typer').style.display = 'none'; focusBtn('ok'); }
+function sendTyped(enter) {
+  const text = $('txt').value;
+  if (!text) { toast('Boş'); return; }
+  if (send({ t: 'text', text, enter })) closeTyper();
+}
+$('txt').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); sendTyped(true); } });
+
+// ---------- Düğmeler ----------
+function focusBtn(act) {
+  const b = document.querySelector(`#bar [data-act="${act}"]`);
+  if (b) b.focus({ preventScroll: true });
+}
+function setBar(show) {
+  barVisible = show;
+  $('bar').style.display = show ? 'block' : 'none';
+  $('burger').style.display = show ? 'none' : 'block';
+  if (show) focusBtn('ok'); else $('burger').focus({ preventScroll: true });
+}
+
+const ACTIONS = {
+  mode: () => { mode = mode === 'view' ? 'cursor' : 'view'; apply(); toast(mode === 'cursor' ? 'İmleç modu' : 'Görünüm modu'); },
+  left: () => arrow(-1, 0), right: () => arrow(1, 0), up: () => arrow(0, -1), down: () => arrow(0, 1),
+  ok: () => (mode === 'cursor' ? click({}) : cycleZoom()),
+  dbl: () => click({ dbl: true }),
+  rclick: () => click({ right: true }),
+  type: openTyper,
+  esc: () => send({ t: 'key', key: 'esc' }),
+  pgup: () => send({ t: 'key', key: 'pageup' }),
+  pgdn: () => send({ t: 'key', key: 'pagedown' }),
+  enter: () => send({ t: 'key', key: 'enter' }),
+  zoom: cycleZoom,
+  hide: () => setBar(false),
+  show: () => setBar(true),
+  dbg: () => { const d = $('dbg'); d.style.display = d.style.display === 'block' ? 'none' : 'block'; },
+  't-send': () => sendTyped(false),
+  't-sendenter': () => sendTyped(true),
+  't-close': closeTyper,
+};
+document.addEventListener('click', e => {
+  const b = e.target.closest('[data-act]');
+  if (b && ACTIONS[b.dataset.act]) { e.preventDefault(); ACTIONS[b.dataset.act](); }
 });
+
+// ---------- Hata ayıklama: gözlükten hangi olaylar geliyor? ----------
+const dbgLines = [];
+function dbg(s) {
+  dbgLines.push(s);
+  if (dbgLines.length > 6) dbgLines.shift();
+  $('dbg').textContent = dbgLines.join('\n');
+}
+['keydown', 'pointerdown', 'wheel', 'touchstart', 'contextmenu'].forEach(t =>
+  document.addEventListener(t, e => dbg(t + (e.key ? ' ' + e.key : '') + (e.pointerType ? ' ' + e.pointerType : '')), true));
+
+setBar(true);
 </script>
 </body>
 </html>

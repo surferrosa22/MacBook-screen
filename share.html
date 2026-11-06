@@ -6,53 +6,93 @@
 <style>
   body { font: 18px/1.4 system-ui, sans-serif; background: #111; color: #eee; max-width: 640px; margin: 40px auto; padding: 0 16px; }
   button { font-size: 18px; padding: 12px 20px; margin-right: 8px; cursor: pointer; }
+  select { font-size: 16px; }
   #log { margin-top: 16px; color: #8f8; white-space: pre-wrap; }
+  #warn { color: #fa4; }
   video { width: 100%; max-height: 300px; background: #000; margin-top: 16px; }
+  label { display: block; margin: 10px 0; }
 </style>
 </head>
 <body>
 <h1>Ekranı gözlüğe yolla</h1>
-<p>Önce gözlükte uygulamayı aç, sonra "Paylaşımı başlat"a bas ve <b>Tüm ekran</b>ı seç.</p>
+<p id="warn"></p>
 <p>
   Kare hızı:
   <select id="fps"><option value="10">10 fps (en net yazı)</option><option value="30">30 fps</option><option value="60" selected>60 fps (en akıcı)</option></select>
   Çözünürlük:
   <select id="res"><option value="1280">1280</option><option value="1920" selected>1920</option><option value="2560">2560</option></select>
 </p>
-<button id="start">Paylaşımı başlat</button>
-<button id="stop" disabled>Durdur</button>
+<label><input type="checkbox" id="ctl"> Gözlükten uzaktan kontrol (yazı yaz, tıkla, tuşa bas)</label>
+<div id="helper">Yardımcı: kontrol edilmedi</div>
+<p><button id="start">Paylaşımı başlat</button><button id="stop" disabled>Durdur</button></p>
 <video id="preview" autoplay muted playsinline></video>
 <div id="log"></div>
 
 <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
 <script>
-const ROOM = 'dc5ec42ee380281f';          // viewer ile aynı olmalı
-const SENDER_ID = 'dz-' + ROOM + '-sender';
-
+// Gizli anahtar adresten gelir (?k=... ya da #k=...). Repoda yok, bu yüzden başkası bağlanamaz.
+const SECRET = new URLSearchParams(location.hash.slice(1)).get('k') ||
+               new URLSearchParams(location.search).get('k') || '';
 const logEl = document.getElementById('log');
 const log = m => { logEl.textContent += m + '\n'; };
-
 const FPS = () => +document.getElementById('fps').value;
 const RES = () => +document.getElementById('res').value;
 const bitrateFor = fps => fps >= 60 ? 14000000 : fps >= 30 ? 10000000 : 8000000;
+const HELPER = 'http://127.0.0.1:8787';
+
+async function derive(role) {
+  const b = await crypto.subtle.digest('SHA-256', new TextEncoder().encode('dz|' + SECRET + '|' + role));
+  return 'dz-' + [...new Uint8Array(b)].slice(0, 12).map(x => x.toString(16).padStart(2, '0')).join('');
+}
+
 let stream = null;
 const conns = new Set();
 const calls = new Set();
+let peer = null;
 
-const peer = new Peer(SENDER_ID);
-peer.on('open', id => log('Hazır: ' + id));
-peer.on('error', e => log('Hata: ' + e.type + ' ' + (e.message || '')));
-peer.on('connection', conn => {
-  conns.add(conn);
-  conn.on('open', () => { log('Gözlük bağlandı'); if (stream) callViewer(conn.peer); });
-  conn.on('close', () => { conns.delete(conn); log('Gözlük ayrıldı'); });
-});
+// ---- Yardımcıya komut yolla ----
+async function helperFetch(path, opts) {
+  return fetch(HELPER + path, Object.assign({ headers: { 'Content-Type': 'application/json', 'X-Token': SECRET } }, opts));
+}
+async function checkHelper() {
+  const el = document.getElementById('helper');
+  try {
+    const r = await helperFetch('/ping');
+    el.textContent = r.ok ? 'Yardımcı: bağlı ✓' : 'Yardımcı: anahtar uyuşmuyor ✗';
+    el.style.color = r.ok ? '#8f8' : '#f88';
+  } catch (e) {
+    el.textContent = 'Yardımcı: çalışmıyor (Terminal\'de mac-helper.js başlat, Chrome kullan)';
+    el.style.color = '#fa4';
+  }
+}
+setInterval(checkHelper, 5000);
 
+const KEYS = ['enter', 'esc', 'tab', 'space', 'backspace', 'left', 'right', 'up', 'down', 'pageup', 'pagedown', 'home', 'end'];
+function sanitize(m) {
+  if (!m || typeof m !== 'object') return null;
+  if (m.t === 'text' && typeof m.text === 'string' && m.text.length > 0) return { t: 'text', text: m.text.slice(0, 2000), enter: !!m.enter };
+  if (m.t === 'key' && KEYS.includes(m.key)) return { t: 'key', key: m.key };
+  if (m.t === 'click' && isFinite(m.x) && isFinite(m.y)) return { t: 'click', x: Math.min(1, Math.max(0, +m.x)), y: Math.min(1, Math.max(0, +m.y)), right: !!m.right, dbl: !!m.dbl };
+  return null;
+}
+async function onControl(conn, m) {
+  const reply = o => conn.open && conn.send(Object.assign({ t: 'ack' }, o));
+  if (!document.getElementById('ctl').checked) return reply({ ok: false, err: 'Kontrol kapalı' });
+  const cmd = sanitize(m);
+  if (!cmd) return;
+  try {
+    const r = await helperFetch('/cmd', { method: 'POST', body: JSON.stringify(cmd) });
+    reply(r.ok ? { ok: true } : { ok: false, err: 'Yardımcı hatası ' + r.status });
+  } catch (e) {
+    reply({ ok: false, err: 'Yardımcı çalışmıyor' });
+  }
+}
+
+// ---- Bağlantı ----
 function callViewer(viewerId) {
   const call = peer.call(viewerId, stream);
   calls.add(call);
   call.on('close', () => calls.delete(call));
-  // Bağlantı kurulunca bitrate'i yükselt, çözünürlüğü koru
   const tune = setInterval(async () => {
     const pc = call.peerConnection;
     if (!pc) return;
@@ -69,13 +109,32 @@ function callViewer(viewerId) {
   setTimeout(() => clearInterval(tune), 10000);
 }
 
+(async function init() {
+  if (SECRET.length < 12) {
+    document.getElementById('warn').textContent = 'Gizli anahtar yok. Adresin sonuna #k=ANAHTAR ekle.';
+    document.getElementById('start').disabled = true;
+    return;
+  }
+  const senderId = await derive('sender');
+  peer = new Peer(senderId);
+  peer.on('open', () => log('Hazır'));
+  peer.on('error', e => log('Hata: ' + e.type + ' ' + (e.message || '')));
+  peer.on('connection', conn => {
+    conns.add(conn);
+    conn.on('open', () => { log('Gözlük bağlandı'); if (stream) callViewer(conn.peer); });
+    conn.on('data', m => onControl(conn, m));
+    conn.on('close', () => { conns.delete(conn); log('Gözlük ayrıldı'); });
+  });
+  checkHelper();
+})();
+
 document.getElementById('start').onclick = async () => {
   try {
     stream = await navigator.mediaDevices.getDisplayMedia({
       video: { frameRate: { ideal: FPS(), max: FPS() }, width: { ideal: RES(), max: RES() }, height: { ideal: Math.round(RES() * 0.625), max: Math.round(RES() * 0.625) } },
       audio: false
     });
-    stream.getVideoTracks()[0].contentHint = 'detail'; // yazı netliği için çözünürlüğü önceliklendir
+    stream.getVideoTracks()[0].contentHint = 'detail';
     document.getElementById('preview').srcObject = stream;
     document.getElementById('stop').disabled = false;
     stream.getVideoTracks()[0].onended = stop;
