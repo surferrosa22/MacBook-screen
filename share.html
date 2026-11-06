@@ -52,10 +52,10 @@ function callViewer(viewerId) {
     clearInterval(tune);
     const p = s.getParameters();
     if (!p.encodings || !p.encodings.length) p.encodings = [{}];
-    p.encodings[0].maxBitrate = 6000000;
-    p.encodings[0].maxFramerate = 15;
+    p.encodings[0].maxBitrate = 8000000;
+    p.encodings[0].maxFramerate = 10;
     p.degradationPreference = 'maintain-resolution';
-    try { await s.setParameters(p); log('Kalite ayarlandı (6 Mbps)'); } catch (e) { log('Kalite ayarı olmadı: ' + e.message); }
+    try { await s.setParameters(p); log('Kalite ayarlandı (8 Mbps, 10 fps)'); } catch (e) { log('Kalite ayarı olmadı: ' + e.message); }
   }, 300);
   setTimeout(() => clearInterval(tune), 10000);
 }
@@ -63,7 +63,7 @@ function callViewer(viewerId) {
 document.getElementById('start').onclick = async () => {
   try {
     stream = await navigator.mediaDevices.getDisplayMedia({
-      video: { frameRate: 15, width: { ideal: 1920, max: 1920 }, height: { ideal: 1200, max: 1200 } },
+      video: { frameRate: 10, width: { ideal: 2560, max: 2560 }, height: { ideal: 1600, max: 1600 } },
       audio: false
     });
     stream.getVideoTracks()[0].contentHint = 'detail'; // yazı netliği için çözünürlüğü önceliklendir
